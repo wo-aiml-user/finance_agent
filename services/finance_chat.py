@@ -4,23 +4,14 @@ from decimal import Decimal
 from model_config.llm import get_slm
 from prompt.finance_prompt_template import get_finance_analysis_prompt
 from database.finance_memory import get_finance_memory_manager
-from data.finance_profile import FinanceProfile
 import logging
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def convert_decimals_to_float(obj: Any) -> Any:
     """
     Recursively convert Decimal objects to float for MongoDB compatibility.
-    
-    Args:
-        obj: Object that may contain Decimal values
-        
-    Returns:
-        Object with Decimal values converted to float
     """
     if isinstance(obj, Decimal):
         return float(obj)
@@ -47,42 +38,39 @@ class FinanceChatService:
     def _get_slm_client(self):
         """Get or initialize the SLM client."""
         if not self.slm_client:
+            logger.info("Initializing SLM client")
             self.slm_client = get_slm()
         return self.slm_client
     
     def _parse_slm_response(self, response_text: str) -> Dict[str, Any]:
         """
         Parse the SLM JSON response and validate structure.
-        
-        Args:
-            response_text: Raw response from SLM
-            
-        Returns:
-            Parsed and validated response dict
-            
-        Raises:
-            ValueError: If response format is invalid
         """
         try:
-            # Clean the response text (remove markdown formatting if present)
             clean_text = response_text.strip()
             if clean_text.startswith("```json"):
                 clean_text = clean_text[7:]
             if clean_text.endswith("```"):
                 clean_text = clean_text[:-3]
             clean_text = clean_text.strip()
-            
-            # Parse JSON
+
             parsed_response = json.loads(clean_text)
-            
-            # Validate required keys
-            required_keys = ["FinanceProfile", "profile_summary"]
-            for key in required_keys:
-                if key not in parsed_response:
-                    raise ValueError(f"Missing required key: {key}")
-            
+
+            required_keys = [
+                "account_overview",
+                "spending_analysis",
+                "income_analysis",
+                "debt_analysis",
+                "risk_flags",
+                "recommendations",
+                "summary",
+            ]
+            missing = [k for k in required_keys if k not in parsed_response]
+            if missing:
+                raise ValueError(f"Missing required keys: {', '.join(missing)}")
+
             return parsed_response
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse SLM response as JSON: {e}")
             logger.error(f"Response text: {response_text}")
@@ -94,29 +82,15 @@ class FinanceChatService:
     def analyze_user_finances(self, user_data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
         """
         Analyze user financial data using SLM and store results in memory.
-        
-        Args:
-            user_data: User's financial data from dt.json
-            user_id: Unique identifier for the user
-            
-        Returns:
-            Complete analysis result with profile, insights, and summary
         """
         try:
-            # Convert Decimal objects to float for MongoDB compatibility
+            logger.info(f"Starting analysis for user_id='{user_id}'")
             user_data = convert_decimals_to_float(user_data)
-            
-            # Get SLM client
             client = self._get_slm_client()
-            
-            # Build the prompt with user data
             prompt = get_finance_analysis_prompt(user_data)
-            
-            logger.info(f"Analyzing finances for user: {user_id}")
-            
-            # Call SLM for analysis
+            logger.info(f"Calling SLM for analysis user_id='{user_id}', prompt_len={len(prompt)}")
             completion = client.chat.completions.create(
-                model="llama-3.1-8b-instant",  # Fast inference model for reasoning
+                model="openai/gpt-oss-120b",
                 messages=[
                     {
                         "role": "system",
@@ -127,58 +101,39 @@ class FinanceChatService:
                         "content": prompt
                     }
                 ],
-                temperature=0.4,  # Low temperature for consistent structured output
+                temperature=0.4,
             )
-            
-            # Extract and parse response
+            logger.info(f"SLM response received for user_id='{user_id}'")
             response_text = completion.choices[0].message.content
-            logger.info("Received response from SLM, parsing...")
-            
-            # Parse the structured response
+            logger.info(f"Parsing SLM response for user_id='{user_id}', response_len={len(response_text)}")
             parsed_response = self._parse_slm_response(response_text)
-            
-            # Validate FinanceProfile structure
-            finance_profile_data = parsed_response["FinanceProfile"]
-            
-            # Try to create a FinanceProfile instance for validation
-            try:
-                finance_profile = FinanceProfile(**finance_profile_data)
-                # Convert back to dict to ensure all fields are properly serialized
-                validated_profile_data = finance_profile.model_dump()
-            except Exception as e:
-                logger.warning(f"Profile validation failed, using raw data: {e}")
-                validated_profile_data = finance_profile_data
-            
-            # Extract additional components
-            additional_insights = parsed_response.get("additional_insights", {})
-            profile_summary = parsed_response.get("profile_summary", "")
-            
-            # Convert all data to MongoDB-compatible format
+            logger.info(f"Parsed SLM response successfully for user_id='{user_id}'")
+            validated_profile_data = parsed_response
+            profile_summary = parsed_response.get("summary", "")
+            additional_insights = {}
+
             validated_profile_data = convert_decimals_to_float(validated_profile_data)
             additional_insights = convert_decimals_to_float(additional_insights)
-            
-            # Store in finance memory
+            logger.info(f"Storing analysis in finance_memory for user_id='{user_id}'")
             doc_id = self.memory_manager.store_finance_profile(
                 user_id=user_id,
                 profile_data=validated_profile_data,
                 additional_insights=additional_insights,
                 profile_summary=profile_summary
             )
-            
-            logger.info(f"Stored finance profile for user {user_id} with document ID: {doc_id}")
-            
-            # Return complete analysis
+            logger.info(f"Stored finance profile for user_id='{user_id}', document_id='{doc_id}'")
             return {
                 "user_id": user_id,
                 "document_id": doc_id,
                 "finance_profile": validated_profile_data,
                 "additional_insights": additional_insights,
                 "profile_summary": profile_summary,
-                "analysis_status": "success"
+                "slm_response": validated_profile_data,
+                "analysis_status": "success",
             }
             
         except Exception as e:
-            logger.error(f"Error analyzing user finances: {e}")
+            logger.error(f"Error analyzing user finances for user_id='{user_id}': {e}")
             return {
                 "user_id": user_id,
                 "error": str(e),
@@ -186,28 +141,11 @@ class FinanceChatService:
             }
     
     def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve stored financial profile for a user.
-        
-        Args:
-            user_id: Unique identifier for the user
-            
-        Returns:
-            Stored financial profile or None if not found
-        """
+        """Retrieve stored financial profile for a user."""
         return self.memory_manager.get_finance_profile(user_id)
     
     def update_user_insights(self, user_id: str, new_insights: Dict[str, Any]) -> bool:
-        """
-        Update additional insights for a user.
-        
-        Args:
-            user_id: Unique identifier for the user
-            new_insights: New insights to add/update
-            
-        Returns:
-            True if update successful, False otherwise
-        """
+        """Update additional insights for a user."""
         return self.memory_manager.update_profile_insights(user_id, new_insights)
 
 

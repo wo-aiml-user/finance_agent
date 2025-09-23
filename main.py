@@ -3,7 +3,7 @@ Main application module for finance agent with memory building from finance_prof
 """
 
 import json
-from typing import Optional
+from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
@@ -13,17 +13,15 @@ from model_config.llm import get_llm
 from prompt.finance_prompt_template import get_suggestions_prompt
 import logging
 
-# Initialize FastAPI app
 app = FastAPI(
     title="Finance Agent Memory API",
     description="AI-powered memory building system for financial data",
     version="1.0.0"
 )
 
-# Set up logger
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# Pydantic models for API requests/responses
 class MemoryRequest(BaseModel):
     user_id: str
 
@@ -33,14 +31,16 @@ class MemoryResponse(BaseModel):
     document_id: Optional[str] = None
     error: Optional[str] = None
     message: Optional[str] = None
+    slm_response: Optional[dict] = None
 
 class SuggestionResponse(BaseModel):
     user_id: str
     short_msg: str
-    suggestion: str
+    suggestion: List[str]
 
 def _fetch_user_profile(memory_manager, user_id: str) -> dict:
     """Fetch user profile document from finance_profiles or raise 404."""
+    logger.info(f"Fetching user profile from 'finance_profiles' for user_id='{user_id}'")
     finance_profiles_collection = memory_manager.db["finance_profiles"]
     user_profile_data = finance_profiles_collection.find_one({"user_id": user_id})
     if not user_profile_data:
@@ -48,27 +48,34 @@ def _fetch_user_profile(memory_manager, user_id: str) -> dict:
             status_code=404,
             detail=f"No financial profile found for user_id: {user_id} in finance_profiles collection"
         )
+    logger.info(f"Fetched user profile for user_id='{user_id}'")
     return user_profile_data
 
 def _extract_financial_data(user_profile_data: dict) -> dict:
     """Return profile data excluding MongoDB/system metadata fields."""
     excluded_keys = {"_id", "user_id", "created_at", "updated_at"}
-    return {k: v for k, v in user_profile_data.items() if k not in excluded_keys}
+    data = {k: v for k, v in user_profile_data.items() if k not in excluded_keys}
+    logger.info(f"Extracted financial data keys={list(data.keys())}")
+    return data
 
 def _build_memory_response(memory_result: dict, user_id: str) -> "MemoryResponse":
     """Construct a MemoryResponse from the analysis result."""
     if memory_result.get("analysis_status") == "success":
+        logger.info(f"Memory build succeeded for user_id='{user_id}', doc_id='{memory_result.get('document_id')}'")
         return MemoryResponse(
             user_id=user_id,
             memory_status="success",
             document_id=memory_result.get("document_id"),
-            message=f"Memory successfully built and stored for user {user_id}"
+            message=f"Memory successfully built and stored for user {user_id}",
+            slm_response=memory_result.get("slm_response")
         )
+    logger.error(f"Memory build failed for user_id='{user_id}', error='{memory_result.get('error')}'")
     return MemoryResponse(
         user_id=user_id,
         memory_status="failed",
         error=memory_result.get("error", "Unknown error during memory building"),
-        message="Failed to build memory for user"
+        message="Failed to build memory for user",
+        slm_response=memory_result.get("slm_response") if memory_result.get("slm_response") else None
     )
 
 def _get_user_finance_memory(memory_manager, user_id: str) -> dict:
@@ -115,29 +122,30 @@ def _parse_llm_json(text: str) -> dict:
 @app.post("/memory", response_model=MemoryResponse)
 async def build_user_memory(request: MemoryRequest):
     """
-    Build structured memory for a user by reading their data from finance_profiles collection
+    Build structured memory for a user by reading their data from finance_profile collection
     and storing the analyzed memory in finance_memory collection.
     
     This endpoint:
-    1. Reads user financial data from finance_profiles collection by user_id
+    1. Reads user financial data from finance_profile collection by user_id
     2. Uses SLM to analyze and build structured memory
     3. Stores the memory in finance_memory collection
-    4. Returns memory building status
+    4. Returns memory building status and the SLM's structured JSON response
     """
     try:
+        logger.info(f"/memory called for user_id='{request.user_id}'")
         memory_manager = get_finance_memory_manager()
         user_profile_data = _fetch_user_profile(memory_manager, request.user_id)
         user_financial_data = _extract_financial_data(user_profile_data)
 
         # Generate structured memory using SLM analysis
         memory_result = generate_finance_response(user_financial_data, request.user_id)
-
+        logger.info(f"/memory SLM analysis_status='{memory_result.get('analysis_status')}', user_id='{request.user_id}'")
         return _build_memory_response(memory_result, request.user_id)
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Error occurred while building memory")
+        logger.exception(f"Error occurred while building memory for user_id='{request.user_id}'")
         return MemoryResponse(
             user_id=request.user_id,
             memory_status="error",
@@ -149,38 +157,46 @@ async def build_user_memory(request: MemoryRequest):
 async def generate_suggestions(request: MemoryRequest):
     """
     Generate personalized suggestions for a user based on stored finance memory.
-    - Loads user's stored memory (built via /memory)
-    - Filters out null fields from the schema
-    - Uses get_llm() with SUGGESTIONS_PROMPT to generate JSON {short_msg, suggestion}
+    Loads user's stored memory (built via /memory), compacts it, and prompts the LLM
+    to return JSON {short_msg, suggestion: list[string]}.
     """
     try:
+        logger.info(f"/suggestions called for user_id='{request.user_id}'")
         memory_manager = get_finance_memory_manager()
         memory_doc = _get_user_finance_memory(memory_manager, request.user_id)
         compact_memory = _build_suggestions_input(memory_doc)
 
         prompt = get_suggestions_prompt(compact_memory)
         llm = get_llm()
-        # For LangChain ChatGoogleGenerativeAI, invoke with a plain string prompt
+        logger.info(f"Invoking suggestions LLM for user_id='{request.user_id}' with prompt_len={len(prompt)}")
         llm_response = llm.invoke(prompt)
         content = getattr(llm_response, "content", None) or str(llm_response)
+        logger.info(f"Received suggestions LLM response for user_id='{request.user_id}', content_len={len(content)}")
 
         try:
             parsed = _parse_llm_json(content)
+            logger.info(f"Parsed suggestions JSON successfully for user_id='{request.user_id}'")
         except Exception as e:
-            logger.warning(f"Failed to parse suggestions JSON, returning raw text. Error: {e}")
-            # Fallback: wrap raw text as suggestion
-            parsed = {"short_msg": "Personalized advice ready", "suggestion": content}
+            logger.warning(f"Failed to parse suggestions JSON for user_id='{request.user_id}', returning raw text. Error: {e}")
+            parsed = {"short_msg": "Personalized advice ready", "suggestion": [content]}
 
         short_msg = parsed.get("short_msg", "")
-        suggestion = parsed.get("suggestion", "")
+        suggestion = parsed.get("suggestion", [])
+        # Coerce to a list of strings if model returned a single string
+        if isinstance(suggestion, str):
+            suggestion = [suggestion]
+        if not isinstance(suggestion, list):
+            suggestion = [str(suggestion)]
+        suggestion = [str(s).strip() for s in suggestion if str(s).strip()]
         if not suggestion:
             raise HTTPException(status_code=500, detail="LLM did not return suggestion text")
 
+        logger.info(f"/suggestions completed for user_id='{request.user_id}'")
         return SuggestionResponse(user_id=request.user_id, short_msg=short_msg, suggestion=suggestion)
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Error generating suggestions")
+        logger.exception(f"Error generating suggestions for user_id='{request.user_id}'")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

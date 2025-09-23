@@ -10,8 +10,7 @@ class FinanceProfile(BaseModel):
     user_age_years: Optional[int] = None
     user_occupation_job: Optional[str] = None
     user_location_city_country: Optional[str] = None
-    user_has_spouse_partner: Optional[bool] = None
-    user_number_of_children: Optional[int] = None
+
     
     # Income - "How much do you earn?"
     income_total_yearly_amount: Optional[Decimal] = None
@@ -35,16 +34,7 @@ class FinanceProfile(BaseModel):
     savings_monthly_amount: Optional[Decimal] = None
     savings_emergency_fund_total: Optional[Decimal] = None
     savings_percentage_of_income: Optional[float] = None
-    
-    # Goals - "What are your financial goals?"
-    goal_buy_house_amount_needed: Optional[Decimal] = None
-    goal_buy_house_timeline_years: Optional[int] = None
-    goal_retirement_target_amount: Optional[Decimal] = None
-    goal_retirement_age_target: Optional[int] = None
-    goal_children_education_amount: Optional[Decimal] = None
-    goal_vacation_travel_budget: Optional[Decimal] = None
-    goal_other_major_purchases: Optional[str] = None
-    goal_most_important_priority: Optional[str] = None
+
     
     # Current Investments - "What investments do you have?"
     investment_total_portfolio_value: Optional[Decimal] = None

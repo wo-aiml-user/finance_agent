@@ -1,61 +1,56 @@
 import json
-from data.finance_profile import FinanceProfile
 
 
 def _build_system_prompt() -> str:
     """
     Build the system prompt template for financial data analysis.
-    This prompt will be used by the SLM to generate financial profiles and insights.
+    This prompt will be used by the SLM to analyze banking data and return a structured JSON analysis.
     """
-    schema_json = json.dumps(FinanceProfile.model_json_schema()["properties"], indent=2)
-
-    return f"""You are a **financial data analyst** that extracts and transforms banking data into structured financial profiles.
-
-You are given:
-1. The **FinanceProfile schema** (see below).
-2. The **user's latest financial data** from banking records.
+    return f"""You are a financial data analyst. Analyze the user's banking data (transactions, balances, accounts, loans, investments) and produce a concise, structured JSON analysis.
 
 Your objectives:
-- Use the schema provided below, all keys must always be present in the final output, in the same order.
-- Populate or update fields only when data is explicitly present or can be inferred with high confidence.
-- Perform all necessary calculations including:
-  * Monthly income/expense averages from transaction history
-  * Savings rate calculations
-  * Debt-to-income ratios
-  * Investment portfolio value estimates
-- If relevant information exists that is not covered by the schema but valuable for long-term financial planning, add them as new fields appended after the original schema keys using snake_case.
-- Any missing or uncertain values must remain null.
-- Dates must follow ISO 8601 format.
-- Output must be valid JSON with exactly three top-level keys:
-  1. "FinanceProfile" - The complete profile following the schema
-  2. "additional_insights" - Any extra financial insights not covered by schema
-  3. "profile_summary" - Comprehensive paragraph summarizing the user's financial situation
+- Derive insights directly from the provided data; infer only when you have high confidence.
+- Perform key calculations:
+  * Monthly income and expense averages from transaction history
+  * Net monthly cash flow (income - expenses)
+  * Savings rate as a percentage of income
+  * Debt-to-income (DTI) ratio
+- Use ISO 8601 for any dates. Use null for unknown or uncertain values.
+- Output valid JSON only, with the following top-level schema.
 
-### FinanceProfile Schema:
-{schema_json}
-
-### Analysis Instructions:
-- Calculate monthly averages from transaction patterns
-- Identify spending categories from transaction descriptions
-- Assess loan payment consistency and debt management
-- Evaluate cash flow patterns and seasonal variations
-- Provide risk assessment based on transaction volatility
-- Suggest financial health score based on available data
+Expected JSON schema:
+{{
+  "account_overview": {{
+    "total_balance": number,
+    "monthly_income_avg": number,
+    "monthly_expense_avg": number,
+    "net_cash_flow_monthly": number,
+    "savings_rate_pct": number
+  }},
+  "spending_analysis": {{
+    "by_category": [{{ "category": string, "monthly_avg": number, "share_pct": number }}],
+    "top_merchants": [{{ "merchant": string, "amount": number, "count": number }}],
+    "recurring_payments": [{{ "name": string, "amount": number, "frequency": string, "next_expected_date": string|null }}]
+  }},
+  "income_analysis": {{
+    "sources": [{{ "name": string, "monthly_avg": number, "regularity_score": number }}],
+    "volatility_pct": number,
+    "trend": "increasing"|"stable"|"decreasing"
+  }},
+  "debt_analysis": {{
+    "total_debt": number,
+    "dti_ratio_pct": number,
+    "accounts": [{{ "type": string, "balance": number, "apr_pct": number|null, "min_payment": number|null, "status": string }}]
+  }},
+  "risk_flags": [string],
+  "recommendations": [string],
+  "summary": string
+}}
 
 User Banking Data:
 {{input_json}}
 
-Return ONLY this JSON structure:
-{{
-  "FinanceProfile": {{...}},
-  "additional_insights": {{
-    "cash_flow_pattern": "...",
-    "spending_trends": "...", 
-    "financial_health_score": "...",
-    "recommended_actions": ["..."]
-  }},
-  "profile_summary": "Comprehensive paragraph summarizing financial situation, key strengths, areas for improvement, and actionable recommendations."
-}}
+Return ONLY a JSON object that conforms to the schema above.
 """
 
 
@@ -91,7 +86,7 @@ Your task:
 - Avoid sounding robotic or overly formal — keep it conversational.
 - Output a JSON object with two keys:
   - `short_msg` : A concise, notification-like message summarizing the core advice.
-  - `suggestion` : The full, detailed personalized advice as one cohesive paragraph.
+  - `suggestion` : A list of **actionable bullet points**, each representing one clear step or recommendation.
 ---
 Input:
 Finance memory:

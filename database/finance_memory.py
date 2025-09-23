@@ -1,12 +1,14 @@
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from typing import Dict, Any, List, Optional
-import json
 from datetime import datetime
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv('.env')
+
+logger = logging.getLogger(__name__)
 
 
 class FinanceMemoryManager:
@@ -32,23 +34,22 @@ class FinanceMemoryManager:
     def _connect(self):
         """Establish MongoDB connection and get collection reference."""
         try:
+            logger.info(
+                f"Connecting to MongoDB at '{self.connection_string}', database='{self.database_name}', collection='finance_memory'"
+            )
             self.client = MongoClient(self.connection_string)
             self.db = self.client[self.database_name]
             self.collection = self.db["finance_memory"]
-            
-            # Test the connection
             self.client.admin.command('ping')
-            print(f"Connected to MongoDB database: {self.database_name}")
-            
+            logger.info(f"Connected to MongoDB database='{self.database_name}' successfully")
         except Exception as e:
-            print(f"Failed to connect to MongoDB: {e}")
-            # Fallback to mongomock for testing
+            logger.error(f"Failed to connect to MongoDB: {e}")
             try:
                 import mongomock
                 self.client = mongomock.MongoClient()
                 self.db = self.client[self.database_name]
                 self.collection = self.db["finance_memory"]
-                print("Using mongomock for testing/development")
+                logger.warning("Using mongomock for testing/development")
             except ImportError:
                 raise Exception("MongoDB connection failed and mongomock not available")
     
@@ -76,24 +77,25 @@ class FinanceMemoryManager:
             "updated_at": datetime.utcnow(),
             "version": 1
         }
-        
-        # Check if user profile already exists
+        logger.info(f"Storing finance profile for user_id='{user_id}'")
         existing = self.collection.find_one({"user_id": user_id})
-        
         if existing:
-            # Update existing profile
+            logger.info(f"Existing finance profile found for user_id='{user_id}', updating document")
             document["version"] = existing.get("version", 0) + 1
             document["created_at"] = existing.get("created_at", datetime.utcnow())
-            
             result = self.collection.replace_one(
                 {"user_id": user_id}, 
                 document
             )
-            return str(existing["_id"])
+            doc_id = str(existing["_id"])
+            logger.info(f"Updated finance profile for user_id='{user_id}', doc_id='{doc_id}', version={document['version']}")
+            return doc_id
         else:
-            # Insert new profile
+            logger.info(f"No existing profile for user_id='{user_id}', inserting new document")
             result = self.collection.insert_one(document)
-            return str(result.inserted_id)
+            doc_id = str(result.inserted_id)
+            logger.info(f"Inserted finance profile for user_id='{user_id}', doc_id='{doc_id}'")
+            return doc_id
     
     def get_finance_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -105,6 +107,7 @@ class FinanceMemoryManager:
         Returns:
             Complete financial profile document or None if not found
         """
+        logger.info(f"Fetching finance profile for user_id='{user_id}'")
         return self.collection.find_one({"user_id": user_id})
     
     def get_all_profiles(self) -> List[Dict[str, Any]]:
@@ -114,6 +117,7 @@ class FinanceMemoryManager:
         Returns:
             List of all financial profile documents
         """
+        logger.info("Fetching all finance profiles")
         return list(self.collection.find())
     
     def update_profile_insights(self, user_id: str, new_insights: Dict[str, Any]) -> bool:
@@ -127,6 +131,7 @@ class FinanceMemoryManager:
         Returns:
             True if update successful, False otherwise
         """
+        logger.info(f"Updating additional_insights for user_id='{user_id}'")
         result = self.collection.update_one(
             {"user_id": user_id},
             {
@@ -137,7 +142,11 @@ class FinanceMemoryManager:
                 "$inc": {"version": 1}
             }
         )
-        return result.modified_count > 0
+        modified = result.modified_count > 0
+        logger.info(
+            f"Update additional_insights for user_id='{user_id}' status={'success' if modified else 'no-op'}"
+        )
+        return modified
     
     def delete_profile(self, user_id: str) -> bool:
         """
@@ -149,8 +158,13 @@ class FinanceMemoryManager:
         Returns:
             True if deletion successful, False otherwise
         """
+        logger.info(f"Deleting finance profile for user_id='{user_id}'")
         result = self.collection.delete_one({"user_id": user_id})
-        return result.deleted_count > 0
+        success = result.deleted_count > 0
+        logger.info(
+            f"Delete finance profile for user_id='{user_id}' status={'success' if success else 'not-found'}"
+        )
+        return success
     
     def get_profile_history(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -163,6 +177,7 @@ class FinanceMemoryManager:
         Returns:
             List of profile versions ordered by creation date
         """
+        logger.info(f"Fetching profile history for user_id='{user_id}'")
         # For now, just return the current profile
         # In future, implement proper versioning
         current = self.get_finance_profile(user_id)
@@ -172,7 +187,7 @@ class FinanceMemoryManager:
         """Close the MongoDB connection."""
         if self.client:
             self.client.close()
-            print("MongoDB connection closed")
+            logger.info("MongoDB connection closed")
 
 
 # Global instance for easy access

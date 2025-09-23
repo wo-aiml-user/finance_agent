@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Finance Agent Memory System is an AI-powered platform that builds structured financial memory by reading user data from the `finance_profiles` collection and storing analyzed insights in the `finance_memory` collection using Small Language Models (SLM).
+The Finance Agent Memory System is an AI-powered platform that builds structured financial memory by reading user data from the `finance_profiles` collection and storing analyzed insights in the `finance_memory` collection using a Groq-hosted SLM.
 
 ## System Architecture
 
@@ -20,22 +20,23 @@ finance_profiles collection → SLM Analysis → Structured Memory → finance_m
 
 ### 2. SLM Integration (`services/`)
 - **services/finance_chat.py**: SLM communication service for analysis/memory building
-- Uses Groq's fast inference model for structured data extraction
-- Handles response parsing, validation, and persistence to `finance_memory`
+- Uses Groq model `openai/gpt-oss-120b` for structured data extraction
+- Handles response parsing and persistence to `finance_memory`
 
 ### 3. Database Layer (`database/`)
-- **finance_memory.py**: MongoDB integration
-- Manages both `finance_profiles` and `finance_memory` collections
-- Supports CRUD operations with versioning
+- **finance_memory.py**: MongoDB integration for the `finance_memory` collection
+- Supports CRUD operations with simple versioning
 
 ### 4. Data Models (`data/`)
-- **data/finance_profile.py**: Comprehensive financial schema
-- 100+ fields covering income, expenses, goals, investments, debt, etc.
+- Legacy reference: `data/finance_profile.py` (no longer used for validation). The system now relies on a prompt-defined analysis schema (see below).
 
 ### 5. Prompts (`prompt/`)
 - **prompt/finance_prompt_template.py**: Centralized prompt builders
-  - `get_finance_analysis_prompt()` for SLM analysis
-  - `get_suggestions_prompt()` for user-facing advice
+  - `get_finance_analysis_prompt()` analyzes banking data (transactions, balances, loans, investments) and instructs the SLM to return structured JSON with keys:
+    - `account_overview`, `spending_analysis`, `income_analysis`, `debt_analysis`, `risk_flags`, `recommendations`, `summary`
+  - `get_suggestions_prompt()` creates a coaching-style prompt and expects JSON with:
+    - `short_msg` (string)
+    - `suggestion` (list of actionable bullet points)
 
 ## Data Flow
 
@@ -53,29 +54,45 @@ Stores raw financial data per user:
 
 ### 2. Processing: SLM Analysis
 1. Read user data from `finance_profiles` by `user_id`
-2. Build prompt with user data and FinanceProfile schema
-3. Call Groq SLM for structured extraction
-4. Parse and validate JSON response
+2. Build an analysis prompt with user banking data (no hard-coded Pydantic schema)
+3. Call Groq SLM (`openai/gpt-oss-120b`) for structured extraction
+4. Parse and validate JSON response against the expected prompt schema
 
 ### 3. Output Collection: `finance_memory`
-Stores structured financial memory:
+Stores structured financial memory. The `finance_profile` field stores the entire SLM analysis object:
 ```json
 {
   "user_id": "user_123",
   "finance_profile": {
-    "user_age_years": 34,
-    "income_total_yearly_amount": 1400000.00,
-    "expense_total_monthly": 18000.00,
-    "savings_monthly_amount": 95000.00,
-    ...
+    "account_overview": {
+      "total_balance": 152345.75,
+      "monthly_income_avg": 85000,
+      "monthly_expense_avg": 62000,
+      "net_cash_flow_monthly": 23000,
+      "savings_rate_pct": 27.06
+    },
+    "spending_analysis": {
+      "by_category": [{ "category": "groceries", "monthly_avg": 9000, "share_pct": 14.5 }],
+      "top_merchants": [{ "merchant": "Amazon", "amount": 12000, "count": 6 }],
+      "recurring_payments": [{ "name": "Netflix", "amount": 499, "frequency": "monthly", "next_expected_date": "2025-10-01" }]
+    },
+    "income_analysis": {
+      "sources": [{ "name": "Employer", "monthly_avg": 85000, "regularity_score": 0.95 }],
+      "volatility_pct": 5.2,
+      "trend": "stable"
+    },
+    "debt_analysis": {
+      "total_debt": 350000,
+      "dti_ratio_pct": 28.4,
+      "accounts": [{ "type": "credit_card", "balance": 25000, "apr_pct": 24.0, "min_payment": 2500, "status": "current" }]
+    },
+    "risk_flags": ["high_credit_card_apr"],
+    "recommendations": ["Prioritize paying down high-APR balances"],
+    "summary": "Cash flow is positive with manageable DTI; reduce high-APR debt to improve resilience."
   },
-  "additional_insights": {
-    "cash_flow_pattern": "Consistent income with stable expenses",
-    "financial_health_score": "8/10",
-    "recommended_actions": [...]
-  },
-  "profile_summary": "Comprehensive financial analysis...",
-  "created_at": "2024-09-19T10:00:00Z",
+  "additional_insights": {},
+  "profile_summary": "Cash flow is positive with manageable DTI; reduce high-APR debt to improve resilience.",
+  "created_at": "2025-09-23T10:00:00Z",
   "version": 1
 }
 ```
@@ -154,7 +171,16 @@ POST /memory
   "user_id": "user_123",
   "memory_status": "success",
   "document_id": "507f1f77bcf86cd799439011",
-  "message": "Memory successfully built and stored for user user_123"
+  "message": "Memory successfully built and stored for user user_123",
+  "slm_response": {
+    "account_overview": { "total_balance": 152345.75, "monthly_income_avg": 85000, "monthly_expense_avg": 62000, "net_cash_flow_monthly": 23000, "savings_rate_pct": 27.06 },
+    "spending_analysis": { "by_category": [], "top_merchants": [], "recurring_payments": [] },
+    "income_analysis": { "sources": [], "volatility_pct": 0, "trend": "stable" },
+    "debt_analysis": { "total_debt": 0, "dti_ratio_pct": 0, "accounts": [] },
+    "risk_flags": [],
+    "recommendations": [],
+    "summary": "..."
+  }
 }
 ```
 
@@ -171,7 +197,11 @@ POST /suggestions
 {
   "user_id": "user_123",
   "short_msg": "Tighten monthly cash flow and build a 3‑month emergency fund",
-  "suggestion": "Based on your income stability, current savings rate, and debt profile, start by..."
+  "suggestion": [
+    "Increase monthly savings auto-transfer by ₹5,000 to reach a 3‑month emergency fund in 6 months.",
+    "Refinance or pay down the highest-APR credit card to cut interest costs.",
+    "Set merchant-level caps for online shopping categories where spend is trending up."
+  ]
 }
 ```
 
@@ -205,10 +235,15 @@ c:\Users\DESK0046\Documents\finance_agent\
 4. **Return**: Provides status and document ID
 
 ### Model Integration
-- **SLM (analysis/memory)**: Groq `llama-3.1-8b-instant`
-- **LLM (suggestions)**: Google Gemini `gemini-2.5flash`
+- **SLM (analysis/memory)**: Groq `openai/gpt-oss-120b`
+- **LLM (suggestions)**: Google Gemini `gemini-2.5-flash`
 - Temperature: 0.4 (consistent structured output)
-- Response format: Strict JSON for analysis; JSON with `short_msg` and `suggestion` for suggestions
+- Response format:
+  - Analysis: strict JSON with keys `account_overview`, `spending_analysis`, `income_analysis`, `debt_analysis`, `risk_flags`, `recommendations`, `summary`
+  - Suggestions: JSON with `short_msg` (string) and `suggestion` (list of strings)
+
+### Logging
+- Global logging is configured at `DEBUG` level in `main.py` with informative f-string messages across endpoints and database operations.
 
 ## Testing
 
