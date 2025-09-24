@@ -10,34 +10,6 @@ The Finance Agent Memory System is an AI-powered platform that builds structured
 finance_profiles collection → SLM Analysis → Structured Memory → finance_memory collection
 ```
 
-## Key Components
-
-### 1. Memory Endpoint (`/memory`)
-- **Single endpoint** for memory building
-- Reads user data from `finance_profiles` collection by `user_id`
-- Uses SLM to analyze and structure the data
-- Stores results in `finance_memory` collection
-
-### 2. SLM Integration (`services/`)
-- **services/finance_chat.py**: SLM communication service for analysis/memory building
-- Uses Groq model `openai/gpt-oss-120b` for structured data extraction
-- Handles response parsing and persistence to `finance_memory`
-
-### 3. Database Layer (`database/`)
-- **finance_memory.py**: MongoDB integration for the `finance_memory` collection
-- Supports CRUD operations with simple versioning
-
-### 4. Data Models (`data/`)
-- Legacy reference: `data/finance_profile.py` (no longer used for validation). The system now relies on a prompt-defined analysis schema (see below).
-
-### 5. Prompts (`prompt/`)
-- **prompt/finance_prompt_template.py**: Centralized prompt builders
-  - `get_finance_analysis_prompt()` analyzes banking data (transactions, balances, loans, investments) and instructs the SLM to return structured JSON with keys:
-    - `account_overview`, `spending_analysis`, `income_analysis`, `debt_analysis`, `risk_flags`, `recommendations`, `summary`
-  - `get_suggestions_prompt()` creates a coaching-style prompt and expects JSON with:
-    - `short_msg` (string)
-    - `suggestion` (list of actionable bullet points)
-
 ## Data Flow
 
 ### 1. Input Collection: `finance_profiles`
@@ -148,9 +120,6 @@ DATABASE_NAME=finance_agent
 
 ### 3. Run the System
 ```bash
-# Test the memory endpoint logic
-python test_memory_endpoint.py
-
 # Start the API server
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -242,21 +211,6 @@ c:\Users\DESK0046\Documents\finance_agent\
   - Analysis: strict JSON with keys `account_overview`, `spending_analysis`, `income_analysis`, `debt_analysis`, `risk_flags`, `recommendations`, `summary`
   - Suggestions: JSON with `short_msg` (string) and `suggestion` (list of strings)
 
-### Logging
-- Global logging is configured at `DEBUG` level in `main.py` with informative f-string messages across endpoints and database operations.
-
-## Testing
-
-Test the memory endpoint:
-```bash
-python test_memory_endpoint.py
-```
-
-Tests cover:
-- Database connectivity
-- Test data setup in finance_profiles
-- Memory endpoint logic
-- Collection management
 
 ## Usage Workflow
 
@@ -270,4 +224,3 @@ Tests cover:
 1. **Environment Setup**: Configure GROQ_API_KEY and MongoDB
 2. **Data Preparation**: Load user data into `finance_profiles` collection
 4. **Integration**: Connect with your data sources
-5. **Production**: Deploy with proper security and monitoring
